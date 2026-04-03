@@ -8,7 +8,6 @@ task androidJavadocs(type: Javadoc) {
     source = android.sourceSets.main.java.sourceFiles
     classpath += project.files(android.getBootClasspath().join(File.pathSeparator))
 
-    // disable the crazy super-strict doclint tool in Java 8
     if (JavaVersion.current().isJava8Compatible()) {
         options.addStringOption('Xdoclint:none', '-quiet')
     }
@@ -42,7 +41,7 @@ task androidSourcesJar(type: Jar) {
 }
 
 def pomConfig = {
-    url "https://github.com/TomRoush/PdfBox-Android"
+    url "https://github.com/idineshgovind/PdfBox-Android"
     licenses {
         license {
             name "The Apache Software License, Version 2.0"
@@ -52,16 +51,15 @@ def pomConfig = {
     }
     developers {
         developer {
-            name "Tom Roush"
-            email "tom@tom-roush.com"
-            organization "PdfBox-Android Developers"
-            organizationUrl "https://github.com/TomRoush/PdfBox-Android"
+            id "idineshgovind"
+            name "Dinesh G"
+            url "https://github.com/idineshgovind"
         }
     }
     scm {
-        connection "scm:git:git@github.com:TomRoush/PdfBox-Android.git"
-        developerConnection "scm:git:ssh@github.com:TomRoush/PdfBox-Android.git"
-        url "https://github.com/TomRoush/PdfBox-Android"
+        connection "scm:git:git://github.com/idineshgovind/PdfBox-Android.git"
+        developerConnection "scm:git:ssh://git@github.com/idineshgovind/PdfBox-Android.git"
+        url "https://github.com/idineshgovind/PdfBox-Android"
     }
 }
 
@@ -69,9 +67,8 @@ project.afterEvaluate {
     publishing {
         repositories {
             maven {
-                def releaseRepo = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
-                def snapshotRepo = "https://s01.oss.sonatype.org/content/repositories/snapshots/"
-                url = isReleaseVersion ? releaseRepo : snapshotRepo
+                name = 'central'
+                url = "https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/"
                 credentials {
                     username = project.hasProperty('ossrhUsername') ? ossrhUsername : System.getenv('OSSRH_USERNAME')
                     password = project.hasProperty('ossrhPassword') ? ossrhPassword : System.getenv('OSSRH_PASSWORD')
@@ -91,10 +88,9 @@ project.afterEvaluate {
                 pom.withXml {
                     def root = asNode()
                     root.appendNode('name', 'PdfBox-Android')
-                    root.appendNode('description', 'The Apache PdfBox project ported to work on Android')
+                    root.appendNode('description', 'A security-hardened fork of PdfBox-Android — the Apache PdfBox project ported to work on Android')
                     root.children().last() + pomConfig
 
-                    // Manually add all the pom nodes for dependencies
                     def dependenciesNode = asNode().appendNode('dependencies')
                     configurations.api.allDependencies.each {
                         def dependencyNode = dependenciesNode.appendNode('dependency')
@@ -113,5 +109,34 @@ project.afterEvaluate {
         def signingPassword = findProperty("signingPassword")
         useInMemoryPgpKeys(signingKeyId, signingKey, signingPassword)
         sign publishing.publications.maven
+    }
+}
+
+// After publishing, finalize the deployment on Central Portal
+task finalizeDeployment {
+    description = 'Triggers the Central Portal to pick up the deployment from the OSSRH Staging API'
+    dependsOn 'publishMavenPublicationToCentralRepository'
+    doLast {
+        def username = project.hasProperty('ossrhUsername') ? ossrhUsername : System.getenv('OSSRH_USERNAME')
+        def password = project.hasProperty('ossrhPassword') ? ossrhPassword : System.getenv('OSSRH_PASSWORD')
+        def token = "${username}:${password}".bytes.encodeBase64().toString()
+        def namespace = project.PUBLISH_GROUP_ID
+
+        def url = new URL("https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/${namespace}?publishing_type=automatic")
+        def conn = url.openConnection()
+        conn.setRequestMethod('POST')
+        conn.setRequestProperty('Authorization', "Bearer ${token}")
+        conn.setRequestProperty('Content-Length', '0')
+        conn.setDoOutput(true)
+        conn.getOutputStream().close()
+
+        def code = conn.getResponseCode()
+        if (code >= 200 && code < 300) {
+            println "Deployment finalized successfully (HTTP ${code}). It will appear at https://central.sonatype.com/publishing/deployments"
+        } else {
+            def body = conn.getErrorStream()?.text ?: conn.getInputStream()?.text ?: ''
+            println "WARNING: Finalize returned HTTP ${code}: ${body}"
+            println "You may need to manually release at https://central.sonatype.com/publishing/deployments"
+        }
     }
 }
