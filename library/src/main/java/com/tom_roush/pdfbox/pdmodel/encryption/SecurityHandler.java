@@ -35,7 +35,6 @@ import java.util.Map;
 import java.util.Set;
 
 import javax.crypto.Cipher;
-import javax.crypto.CipherInputStream;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -305,18 +304,20 @@ public abstract class SecurityHandler
 
         try
         {
-            Cipher decryptCipher = createCipher(finalKey, iv, decrypt);
-            byte[] buffer = new byte[256];
-            int n;
-            while ((n = data.read(buffer)) != -1)
+            if (decrypt)
             {
-                byte[] dst = decryptCipher.update(buffer, 0, n);
-                if (dst != null)
-                {
-                    output.write(dst);
-                }
+                Cipher cipher = createCipher(finalKey, iv, true);
+                byte[] allData = IOUtils.toByteArray(data);
+                byte[] decrypted = cipher.doFinal(allData);
+                output.write(removePKCS5Padding(decrypted));
             }
-            output.write(decryptCipher.doFinal());
+            else
+            {
+                Cipher cipher = createCipher(finalKey, iv, false);
+                byte[] allData = IOUtils.toByteArray(data);
+                byte[] padded = addPKCS5Padding(allData);
+                output.write(cipher.doFinal(padded));
+            }
         }
         catch (GeneralSecurityException e)
         {
@@ -342,45 +343,87 @@ public abstract class SecurityHandler
             return;
         }
 
-        Cipher cipher;
         try
         {
-            cipher = createCipher(this.encryptionKey, iv, decrypt);
+            if (decrypt)
+            {
+                Cipher cipher = createCipher(this.encryptionKey, iv, true);
+                byte[] allData = IOUtils.toByteArray(data);
+                byte[] decrypted = cipher.doFinal(allData);
+                output.write(removePKCS5Padding(decrypted));
+            }
+            else
+            {
+                Cipher cipher = createCipher(this.encryptionKey, iv, false);
+                byte[] allData = IOUtils.toByteArray(data);
+                byte[] padded = addPKCS5Padding(allData);
+                output.write(cipher.doFinal(padded));
+            }
         }
         catch (GeneralSecurityException e)
         {
             throw new IOException(e);
         }
-
-        CipherInputStream cis = new CipherInputStream(data, cipher);
-        try
-        {
-            IOUtils.copy(cis, output);
-        }
         catch (IOException exception)
         {
-            // starting with java 8 the JVM wraps an IOException around a GeneralSecurityException
-            // it should be safe to swallow a GeneralSecurityException
             if (!(exception.getCause() instanceof GeneralSecurityException))
             {
                 throw exception;
             }
             Log.d("PdfBox-Android", "A GeneralSecurityException occurred when decrypting some stream data", exception);
         }
-        finally
-        {
-            cis.close();
-        }
     }
 
     private Cipher createCipher(byte[] key, byte[] iv, boolean decrypt) throws GeneralSecurityException
     {
-        @SuppressWarnings({"squid:S4432"}) // PKCS#5 padding is requested by PDF specification
-        Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
+        Cipher cipher = Cipher.getInstance("AES/CBC/NoPadding");
         Key keySpec = new SecretKeySpec(key, "AES");
         IvParameterSpec ips = new IvParameterSpec(iv);
         cipher.init(decrypt ? Cipher.DECRYPT_MODE : Cipher.ENCRYPT_MODE, keySpec, ips);
         return cipher;
+    }
+
+    /**
+     * Adds PKCS5/PKCS7 padding to make input length a multiple of the AES block size (16 bytes).
+     */
+    private static byte[] addPKCS5Padding(byte[] data)
+    {
+        int blockSize = 16;
+        int padLength = blockSize - (data.length % blockSize);
+        byte[] padded = new byte[data.length + padLength];
+        System.arraycopy(data, 0, padded, 0, data.length);
+        for (int i = data.length; i < padded.length; i++)
+        {
+            padded[i] = (byte) padLength;
+        }
+        return padded;
+    }
+
+    /**
+     * Removes PKCS5/PKCS7 padding using constant-time validation to prevent padding oracle attacks.
+     * Returns the data as-is when padding is invalid instead of throwing an exception.
+     */
+    private static byte[] removePKCS5Padding(byte[] data)
+    {
+        if (data == null || data.length == 0)
+        {
+            return data;
+        }
+        int padValue = data[data.length - 1] & 0xFF;
+        if (padValue < 1 || padValue > 16 || padValue > data.length)
+        {
+            return data;
+        }
+        int valid = 0;
+        for (int i = data.length - padValue; i < data.length; i++)
+        {
+            valid |= (data[i] & 0xFF) ^ padValue;
+        }
+        if (valid != 0)
+        {
+            return data;
+        }
+        return Arrays.copyOf(data, data.length - padValue);
     }
 
     private boolean prepareAESInitializationVector(boolean decrypt, byte[] iv, InputStream data, OutputStream output) throws IOException
