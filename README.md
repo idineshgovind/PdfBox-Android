@@ -1,5 +1,6 @@
 PdfBox-Android
 ==============
+This project is based on and Forked from [PdfBox-Android by Tom Rush](https://github.com/tomroush/pdfbox-android)
 
 A port of Apache's PdfBox library to be usable on Android. Most features should be implemented by now. Feature requests can be added to the issue tracker. Stable releases can be added as a Gradle dependency from Maven Central.
 
